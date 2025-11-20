@@ -9,13 +9,46 @@ st.set_page_config(page_title="VR Securities Limited", layout="wide", initial_si
 # Initialize DB
 init_db()
 
-# Theme config handled by .streamlit/config.toml or system default.
+# --- Theme Logic ---
+# Config sets base="dark". We offer a toggle to force Light Mode CSS.
+st.sidebar.header("Theme")
+dark_mode = st.sidebar.toggle("Dark Mode", value=True)
+
+if not dark_mode:
+    # Inject CSS to force light mode styles over the dark base
+    st.markdown("""
+        <style>
+            [data-testid="stAppViewContainer"] {
+                background-color: #ffffff;
+                color: #31333F;
+            }
+            [data-testid="stSidebar"] {
+                background-color: #f0f2f6;
+                color: #31333F;
+            }
+            [data-testid="stHeader"] {
+                background-color: rgba(255, 255, 255, 0);
+            }
+            .stMarkdown, .stText, h1, h2, h3, h4, h5, h6 {
+                color: #31333F !important;
+            }
+            /* Adjust metric values */
+            [data-testid="stMetricValue"] {
+                color: #31333F !important;
+            }
+            /* Adjust tables - this is tricky as they use specific classes, but basic text might work */
+            .stDataFrame {
+                color: #31333F;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 
 st.title("VR Securities Limited")
 
-# Sidebar
+# Sidebar Navigation
 st.sidebar.header("Navigation")
-page = st.sidebar.radio("Go to", ["Dashboard", "Trade", "History", "Settings"])
+# Reordered: Log in is first, so it is the default on start.
+page = st.sidebar.radio("Go to", ["Log in", "Dashboard", "Trade", "History"])
 
 # --- Helper to get price (Mock or Real) ---
 def fetch_price(symbol, exchange):
@@ -24,28 +57,101 @@ def fetch_price(symbol, exchange):
     else:
         return get_current_price_mock(symbol, exchange)
 
+# --- Log in Page (Formerly Settings) ---
+if page == "Log in":
+    st.header("Log in / Settings")
+
+    st.subheader("Fyres API Configuration")
+    st.write("Enter your Fyres API credentials here to use live data. Otherwise, mock data will be used.")
+
+    client_id = st.text_input("Client ID (App ID)", value=st.session_state.get('client_id', ''))
+
+    st.write("---")
+    st.write("**Generate Access Token** (Optional Helper)")
+
+    secret_key = st.text_input("Secret Key (for token generation)", type="password")
+    redirect_uri = st.text_input("Redirect URI", value="https://www.google.com")
+
+    if st.button("Generate Login Link"):
+        if not client_id or not secret_key or not redirect_uri:
+            st.error("Please fill Client ID, Secret Key and Redirect URI")
+        else:
+            from fyers_apiv3 import fyersModel
+            session = fyersModel.SessionModel(
+                client_id=client_id,
+                secret_key=secret_key,
+                redirect_uri=redirect_uri,
+                response_type='code',
+                grant_type='authorization_code'
+            )
+            auth_link = session.generate_authcode()
+            st.info(f"Click [here]({auth_link}) to login. After login, copy the 'auth_code' from the URL and paste below.")
+
+    auth_code = st.text_input("Auth Code (Paste here)")
+
+    if st.button("Get Access Token"):
+        if not auth_code or not client_id or not secret_key or not redirect_uri:
+             st.error("Missing details for token generation.")
+        else:
+            try:
+                from fyers_apiv3 import fyersModel
+                session = fyersModel.SessionModel(
+                    client_id=client_id,
+                    secret_key=secret_key,
+                    redirect_uri=redirect_uri,
+                    response_type='code',
+                    grant_type='authorization_code'
+                )
+                session.set_token(auth_code)
+                response = session.generate_token()
+                if response.get('s') == 'ok' or 'access_token' in response:
+                    token = response['access_token']
+                    st.session_state['generated_token'] = token
+                    st.success("Token Generated! It is auto-filled below.")
+                else:
+                    st.error(f"Failed to generate token: {response}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    access_token_val = st.session_state.get('generated_token', st.session_state.get('access_token', ''))
+    access_token = st.text_input("Access Token", value=access_token_val, type="password")
+
+    if st.button("Save Credentials"):
+        st.session_state['client_id'] = client_id
+        st.session_state['access_token'] = access_token
+        st.session_state['use_real_api'] = True
+        st.success("Credentials saved!")
+
+    st.markdown("---")
+    if st.button("Reset Account (Restore 3 Lakhs)"):
+        reset_account()
+        st.success("Account reset to initial state.")
+
+
 # --- Dashboard Page ---
-if page == "Dashboard":
+elif page == "Dashboard":
     st.header("Dashboard")
 
+    # Fetch Data
     account = get_account()
     balance = account['balance']
-    st.metric("Available Balance", f"₹ {balance:,.2f}")
 
-    st.subheader("Current Holdings")
     holdings = get_holdings()
 
-    if not holdings.empty:
-        # Calculate Live P&L
-        # We need to fetch current prices for each holding
+    total_pl = 0.0
 
-        # Use a list to collect data instead of applying directly if we need robust error handling
+    # Prepare Holdings Data and Calculate Total P&L first for the top metrics
+    if not holdings.empty:
         current_prices = []
         live_pnl = []
         live_pnl_pct = []
+        invested_amts = []
 
         for index, row in holdings.iterrows():
             cp = fetch_price(row['symbol'], row['exchange'])
+            invested = row['quantity'] * row['average_price']
+            invested_amts.append(invested)
+
             if cp is not None:
                 pnl = (cp - row['average_price']) * row['quantity']
                 if row['average_price'] != 0:
@@ -63,27 +169,30 @@ if page == "Dashboard":
         holdings['Current Price'] = current_prices
         holdings['Live P&L'] = live_pnl
         holdings['Live %P&L'] = live_pnl_pct
+        holdings['Invested'] = invested_amts
 
-        # Filter out rows where price fetch failed for display or handle NaN
-        # We will display them but formatted carefully.
+        total_pl = holdings['Live P&L'].sum()
 
-        display_holdings = holdings[['symbol', 'first_buy_date', 'average_price', 'quantity', 'Current Price', 'Live P&L', 'Live %P&L']].copy()
-        display_holdings.columns = ['Security', 'Buying Date', 'Buying Price', 'Quantity', 'Current Price', 'Live P&L', 'Live %P&L']
+    # Metrics Display: Balance and Total P&L side-by-side
+    col1, col2 = st.columns(2)
+    col1.metric("Available Balance", f"₹ {balance:,.2f}")
+    col2.metric("Total Unrealized P&L", f"₹ {total_pl:,.2f}")
 
-        # Styling: We can't format NaNs with {:.2f}, so we might need to fillna or use a custom formatter
-        # Simplest is to fillna with 0 or - for display purposes in a formatted string column,
-        # but Styler works better with numbers.
+    st.subheader("Current Holdings")
+
+    if not holdings.empty:
+        # Columns: Security, Buying Date, Buying Price, Quantity, Invested, Current Price, Live P&L, Live %P&L
+
+        display_holdings = holdings[['symbol', 'first_buy_date', 'average_price', 'quantity', 'Invested', 'Current Price', 'Live P&L', 'Live %P&L']].copy()
+        display_holdings.columns = ['Security', 'Buying Date', 'Buying Price', 'Quantity', 'Invested', 'Current Price', 'Live P&L', 'Live %P&L']
 
         st.dataframe(display_holdings.style.format({
             "Buying Price": "₹ {:.2f}",
+            "Invested": "₹ {:.2f}",
             "Current Price": "₹ {:.2f}",
             "Live P&L": "₹ {:.2f}",
             "Live %P&L": "{:.2f} %"
         }, na_rep="N/A"))
-
-        # Calculate total P&L ignoring Nones
-        total_pl = holdings['Live P&L'].sum()
-        st.metric("Total Unrealized P&L", f"₹ {total_pl:,.2f}")
 
     else:
         st.info("No current holdings.")
@@ -159,73 +268,3 @@ elif page == "History":
         }))
     else:
         st.info("No trade history found.")
-
-# --- Settings Page ---
-elif page == "Settings":
-    st.header("Settings")
-
-    st.subheader("Fyres API Configuration")
-    st.write("Enter your Fyres API credentials here to use live data. Otherwise, mock data will be used.")
-
-    client_id = st.text_input("Client ID (App ID)", value=st.session_state.get('client_id', ''))
-
-    st.write("---")
-    st.write("**Generate Access Token** (Optional Helper)")
-
-    secret_key = st.text_input("Secret Key (for token generation)", type="password")
-    redirect_uri = st.text_input("Redirect URI", value="https://www.google.com")
-
-    if st.button("Generate Login Link"):
-        if not client_id or not secret_key or not redirect_uri:
-            st.error("Please fill Client ID, Secret Key and Redirect URI")
-        else:
-            from fyers_apiv3 import fyersModel
-            session = fyersModel.SessionModel(
-                client_id=client_id,
-                secret_key=secret_key,
-                redirect_uri=redirect_uri,
-                response_type='code',
-                grant_type='authorization_code'
-            )
-            auth_link = session.generate_authcode()
-            st.info(f"Click [here]({auth_link}) to login. After login, copy the 'auth_code' from the URL and paste below.")
-
-    auth_code = st.text_input("Auth Code (Paste here)")
-
-    if st.button("Get Access Token"):
-        if not auth_code or not client_id or not secret_key or not redirect_uri:
-             st.error("Missing details for token generation.")
-        else:
-            try:
-                from fyers_apiv3 import fyersModel
-                session = fyersModel.SessionModel(
-                    client_id=client_id,
-                    secret_key=secret_key,
-                    redirect_uri=redirect_uri,
-                    response_type='code',
-                    grant_type='authorization_code'
-                )
-                session.set_token(auth_code)
-                response = session.generate_token()
-                if response.get('s') == 'ok' or 'access_token' in response:
-                    token = response['access_token']
-                    st.session_state['generated_token'] = token
-                    st.success("Token Generated! It is auto-filled below.")
-                else:
-                    st.error(f"Failed to generate token: {response}")
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-    access_token_val = st.session_state.get('generated_token', st.session_state.get('access_token', ''))
-    access_token = st.text_input("Access Token", value=access_token_val, type="password")
-
-    if st.button("Save Credentials"):
-        st.session_state['client_id'] = client_id
-        st.session_state['access_token'] = access_token
-        st.session_state['use_real_api'] = True
-        st.success("Credentials saved!")
-
-    st.markdown("---")
-    if st.button("Reset Account (Restore 3 Lakhs)"):
-        reset_account()
-        st.success("Account reset to initial state.")
