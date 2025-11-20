@@ -29,16 +29,26 @@ if not dark_mode:
             [data-testid="stHeader"] {
                 background-color: rgba(255, 255, 255, 0);
             }
-            .stMarkdown, .stText, h1, h2, h3, h4, h5, h6 {
+            .stMarkdown, .stText, h1, h2, h3, h4, h5, h6, span, p, label, div {
                 color: #31333F !important;
             }
             /* Adjust metric values */
             [data-testid="stMetricValue"] {
                 color: #31333F !important;
             }
-            /* Adjust tables - this is tricky as they use specific classes, but basic text might work */
+            /* Adjust tables */
             .stDataFrame {
                 color: #31333F;
+            }
+            /* Adjust Inputs */
+            input, textarea, select {
+                color: #31333F !important;
+                background-color: #ffffff !important;
+            }
+            /* Adjust selectbox text specifically if needed */
+            div[data-baseweb="select"] > div {
+                background-color: #ffffff !important;
+                color: #31333F !important;
             }
         </style>
     """, unsafe_allow_html=True)
@@ -47,8 +57,16 @@ st.title("VR Securities Limited")
 
 # Sidebar Navigation
 st.sidebar.header("Navigation")
-# Reordered: Log in is first, so it is the default on start.
-page = st.sidebar.radio("Go to", ["Log in", "Dashboard", "Trade", "History"])
+
+# Use session state to control navigation programmatically
+if "navigation" not in st.session_state:
+    st.session_state["navigation"] = "Log in"
+
+# Callback to sync radio button with session state
+def update_nav():
+    st.session_state["navigation"] = st.session_state["nav_radio"]
+
+page = st.sidebar.radio("Go to", ["Log in", "Dashboard", "Trade", "History"], key="nav_radio", on_change=update_nav, index=["Log in", "Dashboard", "Trade", "History"].index(st.session_state["navigation"]))
 
 # --- Helper to get price (Mock or Real) ---
 def fetch_price(symbol, exchange):
@@ -120,7 +138,11 @@ if page == "Log in":
         st.session_state['client_id'] = client_id
         st.session_state['access_token'] = access_token
         st.session_state['use_real_api'] = True
-        st.success("Credentials saved!")
+        st.success("Credentials saved! Redirecting to Dashboard...")
+
+        # Redirect Logic
+        st.session_state["navigation"] = "Dashboard"
+        st.rerun()
 
     st.markdown("---")
     if st.button("Reset Account (Restore 3 Lakhs)"):
