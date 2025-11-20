@@ -41,8 +41,17 @@ VR Securities Limited is a paper trading application built with Python and Strea
 To use live market data:
 
 1.  Go to the **Settings** tab in the application.
-2.  Enter your **Client ID** (App ID) and **Access Token** from your Fyres API dashboard.
-3.  Click **Save Credentials**.
+2.  Enter your **Client ID** (App ID).
+3.  You can manually enter your **Access Token** OR generate one using the built-in helper:
+    *   Enter **Secret Key** and **Redirect URI**.
+    *   Click **Generate Login Link**, authorize the app, and copy the `auth_code`.
+    *   Paste the `auth_code` and click **Get Access Token**.
+4.  Click **Save Credentials**.
+
+Alternatively, you can use the standalone script to generate the token:
+```bash
+python get_access_token.py
+```
 
 If you do not have Fyres API credentials, simply leave them blank. The app will use mock data for prices.
 

@@ -168,7 +168,56 @@ elif page == "Settings":
     st.write("Enter your Fyres API credentials here to use live data. Otherwise, mock data will be used.")
 
     client_id = st.text_input("Client ID (App ID)", value=st.session_state.get('client_id', ''))
-    access_token = st.text_input("Access Token", value=st.session_state.get('access_token', ''), type="password")
+
+    st.write("---")
+    st.write("**Generate Access Token** (Optional Helper)")
+
+    secret_key = st.text_input("Secret Key (for token generation)", type="password")
+    redirect_uri = st.text_input("Redirect URI", value="https://www.google.com")
+
+    if st.button("Generate Login Link"):
+        if not client_id or not secret_key or not redirect_uri:
+            st.error("Please fill Client ID, Secret Key and Redirect URI")
+        else:
+            from fyers_apiv3 import fyersModel
+            session = fyersModel.SessionModel(
+                client_id=client_id,
+                secret_key=secret_key,
+                redirect_uri=redirect_uri,
+                response_type='code',
+                grant_type='authorization_code'
+            )
+            auth_link = session.generate_authcode()
+            st.info(f"Click [here]({auth_link}) to login. After login, copy the 'auth_code' from the URL and paste below.")
+
+    auth_code = st.text_input("Auth Code (Paste here)")
+
+    if st.button("Get Access Token"):
+        if not auth_code or not client_id or not secret_key or not redirect_uri:
+             st.error("Missing details for token generation.")
+        else:
+            try:
+                from fyers_apiv3 import fyersModel
+                session = fyersModel.SessionModel(
+                    client_id=client_id,
+                    secret_key=secret_key,
+                    redirect_uri=redirect_uri,
+                    response_type='code',
+                    grant_type='authorization_code'
+                )
+                session.set_token(auth_code)
+                response = session.generate_token()
+                if response.get('s') == 'ok' or 'access_token' in response:
+                    token = response['access_token']
+                    st.session_state['generated_token'] = token
+                    st.success("Token Generated! It is auto-filled below.")
+                else:
+                    st.error(f"Failed to generate token: {response}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    access_token_val = st.session_state.get('generated_token', st.session_state.get('access_token', ''))
+    access_token = st.text_input("Access Token", value=access_token_val, type="password")
 
     if st.button("Save Credentials"):
         st.session_state['client_id'] = client_id
